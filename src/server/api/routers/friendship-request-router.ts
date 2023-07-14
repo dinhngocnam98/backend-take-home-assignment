@@ -65,20 +65,25 @@ export const friendshipRequestRouter = router({
     .use(canSendFriendshipRequest)
     .input(SendFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
-      /**
-       * Question 3: Fix bug
-       *
-       * Fix a bug where our users could not send a friendship request after
-       * they'd previously been declined. Steps to reproduce:
-       *  1. User A sends a friendship request to User B
-       *  2. User B declines the friendship request
-       *  3. User A tries to send another friendship request to User B -> ERROR
-       *
-       * Instructions:
-       *  - Go to src/server/tests/friendship-request.test.ts, enable the test
-       * scenario for Question 3
-       *  - Run `yarn test` to verify your answer
-       */
+      const requestFriendship = await ctx.db
+        .selectFrom('friendships')
+        .where('friendships.friendUserId', '=', input.friendUserId)
+        .where('friendships.userId', '=', ctx.session.userId)
+        .where(
+          'friendships.status',
+          '=',
+          FriendshipStatusSchema.Values['declined']
+        )
+        .selectAll()
+        .executeTakeFirst()
+      if (requestFriendship) {
+        return ctx.db
+          .updateTable('friendships')
+          .set({ status: FriendshipStatusSchema.Values['requested'] })
+          .where('friendships.userId', '=', ctx.session.userId)
+          .where('friendships.friendUserId', '=', input.friendUserId)
+          .execute()
+      }
       return ctx.db
         .insertInto('friendships')
         .values({
@@ -94,29 +99,35 @@ export const friendshipRequestRouter = router({
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction().execute(async (t) => {
-        /**
-         * Question 1: Implement api to accept a friendship request
-         *
-         * When a user accepts a friendship request, we need to:
-         *  1. Update the friendship request to have status `accepted`
-         *  2. Create a new friendship request record with the opposite user as the friend
-         *
-         * The end result that we want will look something like this
-         *
-         *  | userId | friendUserId | status   |
-         *  | ------ | ------------ | -------- |
-         *  | 1      | 2            | accepted |
-         *  | 2      | 1            | accepted |
-         *
-         * Instructions:
-         *  - Your answer must be inside this transaction code block
-         *  - Run `yarn test` to verify your answer
-         *
-         * Documentation references:
-         *  - https://kysely-org.github.io/kysely/classes/Transaction.html#transaction
-         *  - https://kysely-org.github.io/kysely/classes/Kysely.html#insertInto
-         *  - https://kysely-org.github.io/kysely/classes/Kysely.html#updateTable
-         */
+        const userFriendship = await t
+          .selectFrom('friendships')
+          .where('friendships.userId', '=', ctx.session.userId)
+          .where('friendships.friendUserId', '=', input.friendUserId)
+          .selectAll()
+          .executeTakeFirst()
+        if (!userFriendship) {
+          await t
+            .insertInto('friendships')
+            .values({
+              userId: ctx.session.userId,
+              friendUserId: input.friendUserId,
+              status: FriendshipStatusSchema.Values['accepted'],
+            })
+            .executeTakeFirst()
+        } else {
+          await t
+            .updateTable('friendships')
+            .set({ status: FriendshipStatusSchema.Values['accepted'] })
+            .where('friendships.userId', '=', ctx.session.userId)
+            .where('friendships.friendUserId', '=', input.friendUserId)
+            .executeTakeFirst()
+        }
+        return await t
+          .updateTable('friendships')
+          .set({ status: FriendshipStatusSchema.Values['accepted'] })
+          .where('friendships.userId', '=', input.friendUserId)
+          .where('friendships.friendUserId', '=', ctx.session.userId)
+          .executeTakeFirst()
       })
     }),
 
@@ -124,18 +135,13 @@ export const friendshipRequestRouter = router({
     .use(canAnswerFriendshipRequest)
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
-      /**
-       * Question 2: Implement api to decline a friendship request
-       *
-       * Set the friendship request status to `declined`
-       *
-       * Instructions:
-       *  - Go to src/server/tests/friendship-request.test.ts, enable the test
-       * scenario for Question 2
-       *  - Run `yarn test` to verify your answer
-       *
-       * Documentation references:
-       *  - https://vitest.dev/api/#test-skip
-       */
+      await ctx.db.transaction().execute(async (t) => {
+        return await t
+          .updateTable('friendships')
+          .set({ status: FriendshipStatusSchema.Values['declined'] })
+          .where('friendships.userId', '=', input.friendUserId)
+          .where('friendships.friendUserId', '=', ctx.session.userId)
+          .executeTakeFirst()
+      })
     }),
 })
